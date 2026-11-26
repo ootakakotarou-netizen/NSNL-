@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#111111">
+<title>睡眠測定</title>
+<style>
+*{box-sizing:border-box}
+:root{color-scheme:dark}
+body{margin:0;background:#111;color:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}
+header{padding:18px 16px;border-bottom:1px solid #303030;text-align:center}
+header h1{font-size:21px;margin:0;font-weight:850}
+header p{margin:4px 0 0;color:#999;font-size:12px}
+main{max-width:760px;margin:auto;padding:16px 14px 40px}
+.card{background:#191919;border:1px solid #303030;border-radius:16px;padding:18px;margin-bottom:14px}
+h2{font-size:17px;margin:0 0 12px}
+.status{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.badge{background:#252525;border:1px solid #383838;border-radius:99px;padding:6px 10px;font-size:12px;color:#ddd}
+.notice{background:#222;border-radius:10px;padding:11px 12px;color:#c8c8c8;font-size:13px;margin:10px 0}
+button{border:0;border-radius:10px;padding:13px 16px;font-weight:800;font-size:14px;cursor:pointer;margin:4px 4px 4px 0;background:#f5f5f5;color:#111}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.secondary{background:#303030;color:#fff}
+button.full{width:100%;margin:5px 0}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.stat{background:#242424;border-radius:12px;padding:13px;min-width:0}
+.stat-label{font-size:12px;color:#999}
+.stat-value{font-size:22px;font-weight:850;overflow-wrap:anywhere}
+.score{font-size:62px;font-weight:900;line-height:1.1;margin:8px 0}
+.small{font-size:12px;color:#999}
+#resultCard{display:none}
+canvas{width:100%;height:160px;background:#111;border-radius:8px}
+.sleep-curtain{position:fixed;inset:0;z-index:1000;background:#000;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 7s ease,visibility 0s linear 7s;display:flex;align-items:center;justify-content:center;flex-direction:column}
+.sleep-curtain.active{opacity:1;visibility:visible;pointer-events:auto;transition:opacity 7s ease}
+.sleep-curtain.blackout .curtain-title{opacity:0;animation:none}
+.curtain-title{font-size:clamp(22px,6vw,36px);font-weight:700;letter-spacing:.15em;color:#b5b5b5;text-align:center;animation:blink 3s ease-in-out infinite}
+.curtain-stop{position:absolute;bottom:calc(22px + env(safe-area-inset-bottom,0px));right:18px;background:#202020;color:#aaa;border:1px solid #444;font-size:12px;padding:9px 13px;opacity:.2}
+.curtain-stop:focus,.curtain-stop:hover{opacity:1}
+.sleep-curtain.blackout .curtain-stop{opacity:0}
+.sleep-curtain.blackout:active .curtain-stop,.sleep-curtain.blackout .curtain-stop:focus{opacity:1}
+@keyframes blink{0%,100%{opacity:.18}50%{opacity:.85}}
+@media(max-width:420px){.grid{gap:8px}.stat{padding:10px}.stat-value{font-size:19px}.card{padding:14px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header><h1>睡眠測定</h1><p>加速度センサーとマイクを使った測定</p></header>
+<main>
+
+<section class="card" id="googleAuthCard" aria-live="polite">
+  <h2>Googleアカウント認証</h2>
+  <p id="googleAuthStatus" class="notice">ログイン状態を確認しています…</p>
+  <button id="googleSignInBtn" class="full" type="button">Googleアカウントでログイン</button>
+  <button id="googleSignOutBtn" class="secondary full" type="button" style="display:none">ログアウト</button>
+</section>
+<section class="card">
+<h2>センサー状態</h2>
+<div class="status">
+<span class="badge" id="motionStatus">加速度：待機中</span>
+<span class="badge" id="micStatus">マイク：待機中</span>
+<span class="badge">音イベント：<b id="liveSoundEvents">0</b></span>
+<span class="badge" id="wakeStatus">画面保持：待機中</span>
+</div>
+<p class="notice">公開されている睡眠計測の考え方を参考に、体動・音イベントを時間区間ごとに分析するNSNL独自の推定方式です。ポケモンスリープ公式と同一の非公開アルゴリズムではありません。15分以下は結果を表示せず、測定データはサーバーへ送信・保存しません。</p>
+<button id="startBtn" class="full" disabled>睡眠測定開始</button>
+<button id="stopBtn" class="secondary full" disabled>測定終了</button>
+<p id="measurementStatus" aria-live="polite">測定していません。</p>
+</section>
+<section class="card">
+<h2>リアルタイムデータ</h2>
+<div class="grid">
+<div class="stat"><div class="stat-label">経過時間</div><div class="stat-value" id="realtimeDuration">0分</div></div>
+<div class="stat"><div class="stat-label">現在の動き</div><div class="stat-value" id="realtimeMovement">0</div></div>
+<div class="stat"><div class="stat-label">小さな動き（秒）</div><div class="stat-value" id="realtimeSmall">0</div></div>
+<div class="stat"><div class="stat-label">大きな動き（秒）</div><div class="stat-value" id="realtimeLarge">0</div></div>
+</div>
+</section>
+<section class="card">
+<h2>動きのグラフ</h2>
+<canvas id="sleepGraph" width="800" height="300"></canvas>
+</section>
+<section class="card" id="resultCard">
+<h2>今回の測定結果</h2>
+<div class="score" id="resultScore">0</div>
+<div id="resultEvaluation"></div>
+<div class="grid" style="margin-top:14px">
+<div class="stat"><div class="stat-label">測定時間</div><div class="stat-value" id="resultDuration">0時間</div></div>
+<div class="stat"><div class="stat-label">大きな動き</div><div class="stat-value" id="resultLarge">0秒</div></div>
+<div class="stat"><div class="stat-label">小さな動き</div><div class="stat-value" id="resultSmall">0秒</div></div>
+<div class="stat"><div class="stat-label">音イベント</div><div class="stat-value" id="resultSound">0</div></div>
+<div class="stat"><div class="stat-label">ぐっすり推定</div><div class="stat-value" id="resultDeep">0分</div></div>
+<div class="stat"><div class="stat-label">すやすや推定</div><div class="stat-value" id="resultMid">0分</div></div>
+<div class="stat"><div class="stat-label">うとうと推定</div><div class="stat-value" id="resultLight">0分</div></div>
+</div>
+</section>
+<section class="card" id="analysisCard" style="display:none">
+<h2>測定データの振り返り</h2>
+<div id="analysisDetails"></div>
+<p class="small">睡眠段階は端末の体動と音イベントから推定した参考値です。脳波などを測定しているわけではなく、ポケモンスリープ公式の計算式とも異なります。医学的な診断には使えません。</p>
+</section>
+<p class="small">測定にはHTTPS接続と、端末・ブラウザのセンサー対応が必要です。マイクは音イベント数の計測に使い、録音データは保存しません。</p>
+</main>
+<div id="sleepCurtain" class="sleep-curtain" aria-live="off"><div class="curtain-title">おやすみ計測中</div><button id="sleepCurtainStop" class="curtain-stop" type="button">測定を終了</button></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup,
+  onAuthStateChanged, signOut, setPersistence, browserLocalPersistence
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAOLvxQqUQ1MWL6dNcGYblcbVW6Q50NZVI",
+  authDomain: "sleep-sensor-af01f.firebaseapp.com",
+  projectId: "sleep-sensor-af01f",
+  storageBucket: "sleep-sensor-af01f.firebasestorage.app",
+  messagingSenderId: "86707291255",
+  appId: "1:86707291255:web:01e2e67fa63c3513503272"
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
+const statusEl = document.getElementById("googleAuthStatus");
+const loginBtn = document.getElementById("googleSignInBtn");
+const logoutBtn = document.getElementById("googleSignOutBtn");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+let authenticatedUser = null;
+
+function updateAuthUI(user) {
+  authenticatedUser = user;
+  if (user) {
+    statusEl.textContent = `ログイン中：${user.displayName || "Googleユーザー"} (${user.email || "メールアドレス非公開"})`;
+    loginBtn.style.display = "none";
+    logoutBtn.style.display = "block";
+    if (startBtn && !window.__nsnlMeasuring) startBtn.disabled = false;
+  } else {
+    statusEl.textContent = "未ログインです。Googleアカウントでログインすると睡眠測定を利用できます。";
+    loginBtn.style.display = "block";
+    logoutBtn.style.display = "none";
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = true;
+  }
+}
+loginBtn.addEventListener("click", async () => {
+  loginBtn.disabled = true;
+  statusEl.textContent = "Googleログインを処理しています…";
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (error) {
+    console.error("Google sign-in failed:", error);
+    statusEl.textContent = `ログインに失敗しました：${error.code || error.message}`;
+    loginBtn.disabled = false;
+  }
+});
+logoutBtn.addEventListener("click", async () => {
+  if (stopBtn && !stopBtn.disabled) { statusEl.textContent = "測定を終了してからログアウトしてください。"; return; }
+  logoutBtn.disabled = true;
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.error("Google sign-out failed:", error);
+    statusEl.textContent = "ログアウトに失敗しました。通信状態を確認してください。";
+  } finally {
+    logoutBtn.disabled = false;
+  }
+});
+try {
+  await setPersistence(auth, browserLocalPersistence);
+} catch (error) {
+  console.error("Auth persistence setup failed:", error);
+}
+onAuthStateChanged(auth, updateAuthUI);
+window.__nsnlIsAuthenticated = () => !!authenticatedUser;
+</script>
+
+<script>
+"use strict";
+let measuring=false,measurementStart=0,measurementTimer=null,motionHandler=null,audioContext=null,analyser=null,micStream=null,audioTimer=null,wakeLock=null,stillSeconds=0,smallSeconds=0,largeSeconds=0,soundEvents=0,soundAboveThreshold=false,soundAboveSamples=0,soundQuietSamples=0,soundCooldownUntil=0,soundNoiseFloor=0.003,graphData=[],sleepCurtainTicker=null,sleepLastBigMove=0,epochStart=0,epochMovement=0,epochSamples=0,epochSoundEvents=0,epochBins=[],lastMagnitude=null,sleepStages={deep:0,mid:0,light:0,awake:0};
+
+const $=id=>document.getElementById(id);
+function resetMeasurementValues(){stillSeconds=0;smallSeconds=0;largeSeconds=0;soundEvents=0;soundAboveThreshold=false;soundAboveSamples=0;soundQuietSamples=0;soundCooldownUntil=0;soundNoiseFloor=0.003;graphData=[];epochStart=Date.now();epochMovement=0;epochSamples=0;epochSoundEvents=0;epochBins=[];lastMagnitude=null;sleepStages={deep:0,mid:0,light:0,awake:0};$("liveSoundEvents").textContent="0";$("realtimeMovement").textContent="0";$("realtimeSmall").textContent="0";$("realtimeLarge").textContent="0";$("realtimeDuration").textContent="0分";drawGraph();}
+function showSleepCurtain(){sleepLastBigMove=Date.now();const c=$("sleepCurtain");c.classList.remove("blackout");c.classList.add("active");if(sleepCurtainTicker)clearInterval(sleepCurtainTicker);sleepCurtainTicker=setInterval(()=>{if(!measuring)return;c.classList.toggle("blackout",Date.now()-sleepLastBigMove>=60000);},1000);}
+function hideSleepCurtain(){if(sleepCurtainTicker){clearInterval(sleepCurtainTicker);sleepCurtainTicker=null;}$("sleepCurtain").classList.remove("active","blackout");}
+async function requestWakeLock(){try{if("wakeLock" in navigator){wakeLock=await navigator.wakeLock.request("screen");$("wakeStatus").textContent="画面保持：ON";}}catch(e){console.info("Wake Lock unavailable",e);}}
+async function releaseWakeLock(){try{if(wakeLock){await wakeLock.release();wakeLock=null;}}catch(e){}$("wakeStatus").textContent="画面保持：待機中";}
+async function startMicrophone(){
+ const micEl=$("micStatus");
+ try{
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error("マイク入力が利用できません。HTTPSで開いているか確認してください。");
+  // この関数は測定開始ボタンのクリック直後に呼び、権限要求をユーザー操作の流れで開始する。
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error("このブラウザは音声解析に対応していません。");
+  audioContext=new AC();
+  if(audioContext.state!=="running")await audioContext.resume();
+  if(audioContext.state!=="running")throw new Error("音声処理を開始できませんでした。画面を一度タップして再試行してください。");
+  const source=audioContext.createMediaStreamSource(micStream);analyser=audioContext.createAnalyser();analyser.fftSize=2048;analyser.smoothingTimeConstant=0;source.connect(analyser);
+  const buffer=new Float32Array(analyser.fftSize);
+  soundAboveThreshold=false;soundAboveSamples=0;soundQuietSamples=0;soundCooldownUntil=0;soundNoiseFloor=0.003;
+  audioTimer=setInterval(()=>{
+   if(!measuring||!analyser||!audioContext||audioContext.state!=="running")return;
+   analyser.getFloatTimeDomainData(buffer);let sum=0,peak=0;
+   for(let i=0;i<buffer.length;i++){const v=Number.isFinite(buffer[i])?buffer[i]:0;sum+=v*v;peak=Math.max(peak,Math.abs(v));}
+   const rms=Math.sqrt(sum/buffer.length),level=Math.min(100,Math.round(rms*1000));
+   // 周囲の音量をゆっくり学習し、一定の環境音だけでイベントが連続判定されないようにする。
+   const eventThreshold=Math.max(0.012,soundNoiseFloor*2.8);
+   const releaseThreshold=Math.max(0.006,soundNoiseFloor*1.6);
+   const detected=(rms>=eventThreshold)||(peak>=Math.max(0.065,soundNoiseFloor*5));
+   if(!soundAboveThreshold){
+    micEl.textContent=`マイク：入力中（音量レベル ${level}）`;
+    // イベント候補ではない時だけ環境音レベルを更新する。
+    if(!detected)soundNoiseFloor=soundNoiseFloor*0.94+rms*0.06;
+   }
+   if(detected){
+    soundAboveSamples++;soundQuietSamples=0;
+    // 100ms以上の音を確認し、イベント間には最低600msの間隔を設ける。
+    if(!soundAboveThreshold&&soundAboveSamples>=2&&Date.now()>=soundCooldownUntil){
+     soundEvents++;epochSoundEvents++;soundAboveThreshold=true;soundCooldownUntil=Date.now()+600;
+     $("liveSoundEvents").textContent=String(soundEvents);
+     micEl.textContent=`マイク：音を検出（音量レベル ${level}）`;
+    }
+   }else{
+    soundAboveSamples=0;
+    if(rms<releaseThreshold)soundQuietSamples++;else soundQuietSamples=0;
+    // 300msほど静かになったら次の音イベントを検出できる状態へ戻す。
+    if(soundQuietSamples>=6){soundAboveThreshold=false;micEl.textContent=`マイク：入力中（音量レベル ${level}）`;}
+   }
+  },50);
+  micEl.textContent="マイク：入力中（音待ち）";
+ }catch(e){console.warn("Microphone unavailable:",e);micEl.textContent="マイク：利用不可（権限・HTTPS・ブラウザ設定を確認）";}
+}
+function stopMicrophone(){if(audioTimer){clearInterval(audioTimer);audioTimer=null;}if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;}if(audioContext){audioContext.close().catch(()=>{});audioContext=null;}analyser=null;$("micStatus").textContent="マイク：待機中";}
+async function startMotion(){
+ if(typeof DeviceMotionEvent!=="undefined"&&typeof DeviceMotionEvent.requestPermission==="function"){
+  try{const permission=await DeviceMotionEvent.requestPermission();if(permission!=="granted")throw new Error("加速度センサーの許可がありません");}
+  catch(e){$("motionStatus").textContent="加速度：許可されていません";return;}
+ }
+ motionHandler=e=>{
+  if(!measuring)return;
+  const a=e.acceleration;
+  const ag=e.accelerationIncludingGravity;
+  let intensity=0;
+  if(a && [a.x,a.y,a.z].some(v=>v!==null&&v!==undefined)){
+   intensity=Math.sqrt((a.x||0)**2+(a.y||0)**2+(a.z||0)**2);
+  }else if(ag){
+   const mag=Math.sqrt((ag.x||0)**2+(ag.y||0)**2+(ag.z||0)**2);
+   intensity=lastMagnitude===null?0:Math.abs(mag-lastMagnitude);
+   lastMagnitude=mag;
+  }else return;
+  epochMovement+=intensity;epochSamples++;
+  if(intensity<0.18)stillSeconds+=0.05;
+  else if(intensity<0.75)smallSeconds+=0.05;
+  else{sleepLastBigMove=Date.now();$("sleepCurtain").classList.remove("blackout");largeSeconds+=0.05;}
+  graphData.push({time:Date.now(),value:intensity});if(graphData.length>300)graphData.shift();
+  $("realtimeMovement").textContent=intensity.toFixed(2);
+  $("realtimeSmall").textContent=String(Math.round(smallSeconds));
+  $("realtimeLarge").textContent=String(Math.round(largeSeconds));
+  drawGraph();
+  if(Date.now()-epochStart>=60000)finalizeEpoch();
+ };
+ window.addEventListener("devicemotion",motionHandler);
+ $("motionStatus").textContent="加速度：測定中";
+}
+function finalizeEpoch(){
+ const avg=epochSamples?epochMovement/epochSamples:0;
+ // NSNL独自の暫定ルール。体動が少なく音イベントも少ない区間ほど「ぐっすり寄り」と推定する。
+ let stage;
+ if(avg<0.12 && epochSoundEvents===0)stage="deep";
+ else if(avg<0.55 && epochSoundEvents<=1)stage="mid";
+ else stage="light";
+ epochBins.push({start:epochStart,end:Date.now(),avg,sounds:epochSoundEvents,stage,samples:epochSamples});
+ sleepStages[stage]++;
+ epochStart=Date.now();epochMovement=0;epochSamples=0;epochSoundEvents=0;
+}
+function stopMotion(){if(motionHandler){window.removeEventListener("devicemotion",motionHandler);motionHandler=null;}$("motionStatus").textContent="加速度：待機中";}
+function drawGraph(){const canvas=$("sleepGraph"),ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle="#333";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();if(graphData.length<2)return;ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();graphData.forEach((p,i)=>{const x=i/(graphData.length-1)*w,y=h-Math.min(1,p.value/5)*h;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();}
+async function startMeasurement(){if(measuring)return;if(!window.__nsnlIsAuthenticated?.()){alert("睡眠測定を開始するにはGoogleアカウントでログインしてください。");return;}resetMeasurementValues();$("resultCard").style.display="none";$("analysisCard").style.display="none";measuring=true;window.__nsnlMeasuring=true;measurementStart=Date.now();$("startBtn").disabled=true;$("stopBtn").disabled=false;$("measurementStatus").textContent="睡眠測定中...";const microphoneStart=startMicrophone();showSleepCurtain();await requestWakeLock();await startMotion();await microphoneStart;measurementTimer=setInterval(()=>{const elapsed=Date.now()-measurementStart,sec=Math.floor(elapsed/1000),min=Math.floor(sec/60),h=Math.floor(sec/3600),m=Math.floor(sec/60)%60;$("realtimeDuration").textContent=h>0?`${h}時間${m}分`:`${min}分`;},1000);}
+function stopMeasurement(){if(!measuring)return;measuring=false;window.__nsnlMeasuring=false;hideSleepCurtain();if(measurementTimer){clearInterval(measurementTimer);measurementTimer=null;}stopMotion();stopMicrophone();releaseWakeLock();$("startBtn").disabled=false;$("stopBtn").disabled=true;const elapsedMs=Math.max(0,Date.now()-measurementStart);if(elapsedMs<=15*60*1000){$("measurementStatus").textContent="15分以下の測定は結果を表示しません。15分を超えてから終了してください。";$("resultCard").style.display="none";$("analysisCard").style.display="none";return;}$("measurementStatus").textContent="測定終了。結果を分析しました。";calculateResult(elapsedMs);}
+function calculateResult(durationMs){
+ if(epochSamples>0 || epochSoundEvents>0)finalizeEpoch();
+ const durationHours=durationMs/3600000;
+ const durationScore=Math.max(0,Math.min(100,Math.round(100-Math.abs(durationHours-8.5)*12)));
+ const score=durationScore;
+ const deepMinutes=sleepStages.deep,midMinutes=sleepStages.mid,lightMinutes=sleepStages.light;
+ let evaluation=score>=90?"測定時間は目安の範囲に近いです。":score>=70?"測定時間を記録しました。普段の睡眠リズムも振り返りましょう。":"測定時間が短いか長めです。今回の結果だけで睡眠の質を判断しないでください。";
+ $("resultScore").textContent=String(score);$("resultEvaluation").textContent=evaluation;
+ $("resultDuration").textContent=durationHours>=1?`${durationHours.toFixed(1)}時間`:`${Math.round(durationMs/60000)}分`;
+ $("resultLarge").textContent=`${Math.round(largeSeconds)}秒`;$("resultSmall").textContent=`${Math.round(smallSeconds)}秒`;
+ $("resultSound").textContent=String(soundEvents);
+ $("resultDeep").textContent=`${deepMinutes}分`;$("resultMid").textContent=`${midMinutes}分`;$("resultLight").textContent=`${lightMinutes}分`;
+ $("resultCard").style.display="block";
+ const issues=[];
+ issues.push(["測定時間",`計測時間は約${Math.round(durationMs/60000)}分です。計測時間と実際の睡眠時間は一致しない場合があります。`]);
+ issues.push(["体動・音からの推定",`ぐっすり ${deepMinutes}分、すやすや ${midMinutes}分、うとうと ${lightMinutes}分と推定しました。これはNSNL独自の暫定分類で、公式アルゴリズムや医学的な睡眠段階判定ではありません。`]);
+ issues.push(["音イベント",`音イベントは${soundEvents}回検出されました。音の数だけで睡眠の質を決めず、体動と合わせて区間ごとの推定に利用しています。`]);
+ issues.push(["スコアについて","この版のスコアは測定時間を基にした参考値です。複数日の睡眠リズムや公式の睡眠スコア計算式は再現していません。"]);
+ $("analysisDetails").replaceChildren(...issues.map(([title,text])=>{const d=document.createElement("div");d.className="notice";const b=document.createElement("strong");b.textContent=title+"：";d.append(b,document.createTextNode(text));return d;}));
+ $("analysisCard").style.display="block";
+}
+$("startBtn").addEventListener("click",startMeasurement);$("stopBtn").addEventListener("click",stopMeasurement);$("sleepCurtainStop").addEventListener("click",stopMeasurement);
+window.addEventListener("pagehide",()=>{if(measuring){measuring=false;if(measurementTimer)clearInterval(measurementTimer);stopMotion();stopMicrophone();releaseWakeLock();hideSleepCurtain();}});
+</script>
+</body>
+</html>
