@@ -47,11 +47,24 @@ canvas{width:100%;height:160px;background:#111;border-radius:8px}
 <header><h1>睡眠測定</h1><p>加速度センサーとマイクを使った測定</p></header>
 <main>
 
-<section class="card" id="googleAuthCard" aria-live="polite">
-  <h2>Googleアカウント認証</h2>
-  <p id="googleAuthStatus" class="notice">ログイン状態を確認しています…</p>
-  <button id="googleSignInBtn" class="full" type="button">Googleアカウントでログイン</button>
-  <button id="googleSignOutBtn" class="secondary full" type="button" style="display:none">ログアウト</button>
+<section class="card" id="identityCard" aria-live="polite">
+  <h2>利用者ID</h2>
+  <p id="identityStatus" class="notice">匿名IDを準備しています…</p>
+  <p class="small">このアプリは匿名IDで利用できます。アプリのデータやブラウザ情報を消去すると、別のIDが発行される場合があります。</p>
+</section>
+<section class="card" id="adminAuthCard" aria-live="polite">
+  <h2>管理者メニュー</h2>
+  <p id="adminAuthStatus" class="notice">管理者ログインは任意です。通常の測定では操作不要です。</p>
+  <button id="adminSignInBtn" class="secondary full" type="button">管理者としてGoogleログイン</button>
+  <button id="adminSignOutBtn" class="secondary full" type="button" style="display:none">管理者ログアウト</button>
+</section>
+<section class="card" id="adminRecordsCard" style="display:none">
+  <h2>利用者の睡眠データ</h2>
+  <p class="small">最新300件を表示します。匿名IDは利用者を識別するためのIDです。</p>
+  <button id="refreshAdminRecordsBtn" class="full" type="button">データを再読み込み</button>
+  <button id="exportAdminRecordsBtn" class="secondary full" type="button">表示中のデータをJSONで保存</button>
+  <p id="adminRecordsStatus" class="notice">データを読み込んでください。</p>
+  <div id="adminRecordsList"></div>
 </section>
 <section class="card">
 <h2>センサー状態</h2>
@@ -105,9 +118,13 @@ canvas{width:100%;height:160px;background:#111;border-radius:8px}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup,
-  onAuthStateChanged, signOut, setPersistence, browserLocalPersistence
+  getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged,
+  signOut, signInAnonymously
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+import {
+  getFirestore, collection, addDoc, getDocs, query, orderBy, limit,
+  serverTimestamp, Timestamp
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAOLvxQqUQ1MWL6dNcGYblcbVW6Q50NZVI",
@@ -117,61 +134,197 @@ const firebaseConfig = {
   messagingSenderId: "86707291255",
   appId: "1:86707291255:web:01e2e67fa63c3513503272"
 };
+const ADMIN_EMAIL = "kawamata.sousuke@ryugasaki1-h.ibk.ed.jp";
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
-const statusEl = document.getElementById("googleAuthStatus");
-const loginBtn = document.getElementById("googleSignInBtn");
-const logoutBtn = document.getElementById("googleSignOutBtn");
+
+const identityStatus = document.getElementById("identityStatus");
+const adminAuthStatus = document.getElementById("adminAuthStatus");
+const adminSignInBtn = document.getElementById("adminSignInBtn");
+const adminSignOutBtn = document.getElementById("adminSignOutBtn");
+const adminRecordsCard = document.getElementById("adminRecordsCard");
+const adminRecordsStatus = document.getElementById("adminRecordsStatus");
+const adminRecordsList = document.getElementById("adminRecordsList");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
-let authenticatedUser = null;
+let currentUser = null;
+let isAdminUser = false;
+let anonymousSignInPromise = null;
+let displayedAdminRecords = [];
 
 function updateAuthUI(user) {
-  authenticatedUser = user;
-  if (user) {
-    statusEl.textContent = `ログイン中：${user.displayName || "Googleユーザー"} (${user.email || "メールアドレス非公開"})`;
-    loginBtn.style.display = "none";
-    logoutBtn.style.display = "block";
-    if (startBtn && !window.__nsnlMeasuring) startBtn.disabled = false;
-  } else {
-    statusEl.textContent = "未ログインです。Googleアカウントでログインすると睡眠測定を利用できます。";
-    loginBtn.style.display = "block";
-    logoutBtn.style.display = "none";
-    if (startBtn) startBtn.disabled = true;
-    if (stopBtn) stopBtn.disabled = true;
+  currentUser = user;
+  isAdminUser = !!(user && !user.isAnonymous &&
+    user.email === ADMIN_EMAIL && user.emailVerified === true);
+
+  if (isAdminUser) {
+    identityStatus.textContent = "管理者としてログイン中です。通常の利用者測定モードではありません。";
+    adminAuthStatus.textContent = `管理者ログイン中：${user.email}`;
+    adminSignInBtn.style.display = "none";
+    adminSignOutBtn.style.display = "block";
+    adminRecordsCard.style.display = "block";
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+    adminRecordsStatus.textContent = "管理者としてログインしました。「データを再読み込み」を押してください。";
+    return;
   }
+
+  adminRecordsCard.style.display = "none";
+  adminSignInBtn.style.display = "block";
+  adminSignOutBtn.style.display = "none";
+
+  if (user && user.isAnonymous) {
+    identityStatus.textContent = `匿名ID発行済み：${user.uid}`;
+    adminAuthStatus.textContent = "管理者ログインは任意です。通常の測定では操作不要です。";
+    if (!window.__nsnlMeasuring) startBtn.disabled = false;
+    return;
+  }
+
+  identityStatus.textContent = "匿名IDを準備しています…";
+  adminAuthStatus.textContent = "管理者ログインは任意です。通常の測定では操作不要です。";
+  startBtn.disabled = true;
 }
-loginBtn.addEventListener("click", async () => {
-  loginBtn.disabled = true;
-  statusEl.textContent = "Googleログインを処理しています…";
-  try {
-    await signInWithPopup(auth, provider);
-  } catch (error) {
-    console.error("Google sign-in failed:", error);
-    statusEl.textContent = `ログインに失敗しました：${error.code || error.message}`;
-    loginBtn.disabled = false;
+
+async function ensureAnonymousUser() {
+  if (auth.currentUser) return auth.currentUser;
+  if (anonymousSignInPromise) return anonymousSignInPromise;
+  anonymousSignInPromise = signInAnonymously(auth)
+    .then(result => result.user)
+    .finally(() => { anonymousSignInPromise = null; });
+  return anonymousSignInPromise;
+}
+
+onAuthStateChanged(auth, async user => {
+  updateAuthUI(user);
+  if (!user) {
+    try {
+      await ensureAnonymousUser();
+    } catch (error) {
+      console.error("Anonymous sign-in failed:", error);
+      identityStatus.textContent = `匿名IDの発行に失敗しました：${error.code || error.message}`;
+      startBtn.disabled = true;
+    }
   }
 });
-logoutBtn.addEventListener("click", async () => {
-  if (stopBtn && !stopBtn.disabled) { statusEl.textContent = "測定を終了してからログアウトしてください。"; return; }
-  logoutBtn.disabled = true;
+
+adminSignInBtn.addEventListener("click", async () => {
+  adminSignInBtn.disabled = true;
+  adminAuthStatus.textContent = "管理者ログインを処理しています…";
+  try {
+    const result = await signInWithPopup(auth, provider);
+    const user = result.user;
+    if (user.email !== ADMIN_EMAIL || user.emailVerified !== true) {
+      await signOut(auth);
+      adminAuthStatus.textContent = "このGoogleアカウントには管理者権限がありません。利用者用の匿名IDに戻します。";
+      await ensureAnonymousUser();
+      return;
+    }
+    updateAuthUI(user);
+  } catch (error) {
+    console.error("Admin sign-in failed:", error);
+    adminAuthStatus.textContent = `管理者ログインに失敗しました：${error.code || error.message}`;
+  } finally {
+    adminSignInBtn.disabled = false;
+  }
+});
+
+adminSignOutBtn.addEventListener("click", async () => {
+  adminSignOutBtn.disabled = true;
   try {
     await signOut(auth);
+    await ensureAnonymousUser();
   } catch (error) {
-    console.error("Google sign-out failed:", error);
-    statusEl.textContent = "ログアウトに失敗しました。通信状態を確認してください。";
+    console.error("Admin sign-out failed:", error);
+    adminAuthStatus.textContent = `ログアウトに失敗しました：${error.code || error.message}`;
   } finally {
-    logoutBtn.disabled = false;
+    adminSignOutBtn.disabled = false;
   }
 });
-try {
-  await setPersistence(auth, browserLocalPersistence);
-} catch (error) {
-  console.error("Auth persistence setup failed:", error);
+
+window.__nsnlIsAuthenticated = () =>
+  !!(auth.currentUser && auth.currentUser.isAnonymous && !isAdminUser);
+
+window.__nsnlSaveMeasurementResult = async result => {
+  const user = auth.currentUser;
+  if (!user || !user.isAnonymous || isAdminUser) {
+    throw new Error("測定用の匿名IDが確認できません。ページを再読み込みしてください。");
+  }
+  const payload = {
+    ownerUid: user.uid,
+    startedAt: Timestamp.fromMillis(result.startedAt),
+    endedAt: serverTimestamp(),
+    durationMs: result.durationMs,
+    score: result.score,
+    largeSeconds: result.largeSeconds,
+    smallSeconds: result.smallSeconds,
+    soundEvents: result.soundEvents,
+    deepMinutes: result.deepMinutes,
+    midMinutes: result.midMinutes,
+    lightMinutes: result.lightMinutes,
+    schemaVersion: 1
+  };
+  const ref = await addDoc(collection(db, "sleepRecords"), payload);
+  return ref.id;
+};
+
+async function loadAdminRecords() {
+  if (!isAdminUser) throw new Error("管理者権限がありません。");
+  adminRecordsStatus.textContent = "睡眠データを読み込んでいます…";
+  adminRecordsList.replaceChildren();
+  const q = query(collection(db, "sleepRecords"), orderBy("endedAt", "desc"), limit(300));
+  const snapshot = await getDocs(q);
+  displayedAdminRecords = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  if (!displayedAdminRecords.length) {
+    adminRecordsStatus.textContent = "まだ睡眠測定データはありません。";
+    return;
+  }
+  adminRecordsStatus.textContent = `${displayedAdminRecords.length}件の測定記録を表示しています。`;
+  for (const record of displayedAdminRecords) {
+    const item = document.createElement("div");
+    item.className = "notice";
+    const date = record.endedAt?.toDate ? record.endedAt.toDate().toLocaleString("ja-JP") : "日時情報なし";
+    const duration = Number(record.durationMs || 0);
+    const durationText = duration >= 3600000
+      ? `${(duration / 3600000).toFixed(1)}時間`
+      : `${Math.round(duration / 60000)}分`;
+    const title = document.createElement("strong");
+    title.textContent = `測定日時：${date}`;
+    const details = document.createElement("div");
+    details.textContent = `匿名ID：${record.ownerUid || "不明"}\n測定時間：${durationText}／スコア：${record.score ?? "-"}／大きな動き：${record.largeSeconds ?? "-"}秒／小さな動き：${record.smallSeconds ?? "-"}秒／音イベント：${record.soundEvents ?? "-"}回\nぐっすり推定：${record.deepMinutes ?? "-"}分／すやすや推定：${record.midMinutes ?? "-"}分／うとうと推定：${record.lightMinutes ?? "-"}分`;
+    details.style.whiteSpace = "pre-wrap";
+    item.append(title, details);
+    adminRecordsList.append(item);
+  }
 }
-onAuthStateChanged(auth, updateAuthUI);
-window.__nsnlIsAuthenticated = () => !!authenticatedUser;
+document.getElementById("refreshAdminRecordsBtn").addEventListener("click", async () => {
+  try {
+    await loadAdminRecords();
+  } catch (error) {
+    console.error("Admin records load failed:", error);
+    adminRecordsStatus.textContent = `読み込みに失敗しました：${error.code || error.message}`;
+  }
+});
+document.getElementById("exportAdminRecordsBtn").addEventListener("click", () => {
+  if (!isAdminUser || !displayedAdminRecords.length) {
+    adminRecordsStatus.textContent = "保存できるデータがありません。";
+    return;
+  }
+  const clean = displayedAdminRecords.map(r => ({
+    id: r.id, ownerUid: r.ownerUid,
+    startedAt: r.startedAt?.toDate ? r.startedAt.toDate().toISOString() : null,
+    endedAt: r.endedAt?.toDate ? r.endedAt.toDate().toISOString() : null,
+    durationMs: r.durationMs, score: r.score, largeSeconds: r.largeSeconds,
+    smallSeconds: r.smallSeconds, soundEvents: r.soundEvents,
+    deepMinutes: r.deepMinutes, midMinutes: r.midMinutes, lightMinutes: r.lightMinutes
+  }));
+  const blob = new Blob([JSON.stringify(clean, null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "NSNL_sleep_records.json"; a.click();
+  URL.revokeObjectURL(url);
+});
 </script>
 
 <script>
@@ -274,7 +427,7 @@ function finalizeEpoch(){
 }
 function stopMotion(){if(motionHandler){window.removeEventListener("devicemotion",motionHandler);motionHandler=null;}$("motionStatus").textContent="加速度：待機中";}
 function drawGraph(){const canvas=$("sleepGraph"),ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle="#333";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();if(graphData.length<2)return;ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();graphData.forEach((p,i)=>{const x=i/(graphData.length-1)*w,y=h-Math.min(1,p.value/5)*h;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();}
-async function startMeasurement(){if(measuring)return;if(!window.__nsnlIsAuthenticated?.()){alert("睡眠測定を開始するにはGoogleアカウントでログインしてください。");return;}resetMeasurementValues();$("resultCard").style.display="none";$("analysisCard").style.display="none";measuring=true;window.__nsnlMeasuring=true;measurementStart=Date.now();$("startBtn").disabled=true;$("stopBtn").disabled=false;$("measurementStatus").textContent="睡眠測定中...";const microphoneStart=startMicrophone();showSleepCurtain();await requestWakeLock();await startMotion();await microphoneStart;measurementTimer=setInterval(()=>{const elapsed=Date.now()-measurementStart,sec=Math.floor(elapsed/1000),min=Math.floor(sec/60),h=Math.floor(sec/3600),m=Math.floor(sec/60)%60;$("realtimeDuration").textContent=h>0?`${h}時間${m}分`:`${min}分`;},1000);}
+async function startMeasurement(){if(measuring)return;if(!window.__nsnlIsAuthenticated?.()){alert("匿名IDの準備が完了していません。通信状態を確認してページを再読み込みしてください。");return;}resetMeasurementValues();$("resultCard").style.display="none";$("analysisCard").style.display="none";measuring=true;window.__nsnlMeasuring=true;measurementStart=Date.now();$("startBtn").disabled=true;$("stopBtn").disabled=false;$("measurementStatus").textContent="睡眠測定中...";const microphoneStart=startMicrophone();showSleepCurtain();await requestWakeLock();await startMotion();await microphoneStart;measurementTimer=setInterval(()=>{const elapsed=Date.now()-measurementStart,sec=Math.floor(elapsed/1000),min=Math.floor(sec/60),h=Math.floor(sec/3600),m=Math.floor(sec/60)%60;$("realtimeDuration").textContent=h>0?`${h}時間${m}分`:`${min}分`;},1000);}
 function stopMeasurement(){if(!measuring)return;measuring=false;window.__nsnlMeasuring=false;hideSleepCurtain();if(measurementTimer){clearInterval(measurementTimer);measurementTimer=null;}stopMotion();stopMicrophone();releaseWakeLock();$("startBtn").disabled=false;$("stopBtn").disabled=true;const elapsedMs=Math.max(0,Date.now()-measurementStart);if(elapsedMs<=15*60*1000){$("measurementStatus").textContent="15分以下の測定は結果を表示しません。15分を超えてから終了してください。";$("resultCard").style.display="none";$("analysisCard").style.display="none";return;}$("measurementStatus").textContent="測定終了。結果を分析しました。";calculateResult(elapsedMs);}
 function calculateResult(durationMs){
  if(epochSamples>0 || epochSoundEvents>0)finalizeEpoch();
@@ -296,6 +449,28 @@ function calculateResult(durationMs){
  issues.push(["スコアについて","この版のスコアは測定時間を基にした参考値です。複数日の睡眠リズムや公式の睡眠スコア計算式は再現していません。"]);
  $("analysisDetails").replaceChildren(...issues.map(([title,text])=>{const d=document.createElement("div");d.className="notice";const b=document.createElement("strong");b.textContent=title+"：";d.append(b,document.createTextNode(text));return d;}));
  $("analysisCard").style.display="block";
+ const saveStatus=$("measurementStatus");
+ saveStatus.textContent="測定結果をFirebaseに保存しています…";
+ if(typeof window.__nsnlSaveMeasurementResult==="function"){
+  window.__nsnlSaveMeasurementResult({
+   startedAt:measurementStart,
+   durationMs,
+   score,
+   largeSeconds:Math.round(largeSeconds),
+   smallSeconds:Math.round(smallSeconds),
+   soundEvents,
+   deepMinutes,
+   midMinutes,
+   lightMinutes
+  }).then(recordId=>{
+   saveStatus.textContent=`測定終了。結果をFirebaseに保存しました（記録ID：${recordId}）。`;
+  }).catch(error=>{
+   console.error("Sleep record save failed:",error);
+   saveStatus.textContent=`測定結果は表示されていますが、Firebaseへの保存に失敗しました：${error.code || error.message}`;
+  });
+ }else{
+  saveStatus.textContent="測定結果は表示されていますが、Firebase保存機能を読み込めませんでした。";
+ }
 }
 $("startBtn").addEventListener("click",startMeasurement);$("stopBtn").addEventListener("click",stopMeasurement);$("sleepCurtainStop").addEventListener("click",stopMeasurement);
 window.addEventListener("pagehide",()=>{if(measuring){measuring=false;if(measurementTimer)clearInterval(measurementTimer);stopMotion();stopMicrophone();releaseWakeLock();hideSleepCurtain();}});
