@@ -34,10 +34,9 @@ canvas{width:100%;height:160px;background:#111;border-radius:8px}
 .sleep-curtain.active{opacity:1;visibility:visible;pointer-events:auto;transition:opacity 7s ease}
 .sleep-curtain.blackout .curtain-title{opacity:0;animation:none}
 .curtain-title{font-size:clamp(22px,6vw,36px);font-weight:700;letter-spacing:.15em;color:#b5b5b5;text-align:center;animation:blink 3s ease-in-out infinite}
-.curtain-stop{position:absolute;bottom:calc(22px + env(safe-area-inset-bottom,0px));right:18px;background:#202020;color:#aaa;border:1px solid #444;font-size:12px;padding:9px 13px;opacity:.2}
-.curtain-stop:focus,.curtain-stop:hover{opacity:1}
-.sleep-curtain.blackout .curtain-stop{opacity:0}
-.sleep-curtain.blackout:active .curtain-stop,.sleep-curtain.blackout .curtain-stop:focus{opacity:1}
+#sleepCurtainStop.curtain-stop,.sleep-curtain .curtain-stop,.sleep-curtain.blackout .curtain-stop{position:absolute;bottom:calc(24px + env(safe-area-inset-bottom,0px));right:calc(18px + env(safe-area-inset-right,0px));margin:0;background:linear-gradient(180deg,#e53935 0%,#c62828 100%);color:#fff;border:2px solid #ff6b6b;border-radius:14px;font-size:17px;font-weight:800;letter-spacing:.04em;line-height:1.2;padding:16px 24px;min-width:176px;min-height:54px;max-width:calc(100vw - 36px);box-shadow:0 6px 20px rgba(229,57,53,.55),0 2px 6px rgba(0,0,0,.75);opacity:1;transition:transform .12s ease,box-shadow .12s ease,background .12s ease}
+#sleepCurtainStop.curtain-stop:hover,#sleepCurtainStop.curtain-stop:focus,.sleep-curtain.blackout .curtain-stop:hover,.sleep-curtain.blackout .curtain-stop:focus{background:linear-gradient(180deg,#ef5350 0%,#d32f2f 100%);box-shadow:0 8px 24px rgba(239,83,80,.7),0 3px 8px rgba(0,0,0,.8);opacity:1;outline:2px solid #ff8a80;outline-offset:2px}
+#sleepCurtainStop.curtain-stop:active,.sleep-curtain.blackout .curtain-stop:active{transform:translateY(1px) scale(.98);box-shadow:0 3px 10px rgba(229,57,53,.5),0 1px 4px rgba(0,0,0,.8);opacity:1}
 @keyframes blink{0%,100%{opacity:.18}50%{opacity:.85}}
 @media(max-width:420px){.grid{gap:8px}.stat{padding:10px}.stat-value{font-size:19px}.card{padding:14px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -113,7 +112,7 @@ canvas{width:100%;height:160px;background:#111;border-radius:8px}
 </section>
 <p class="small">測定にはHTTPS接続と、端末・ブラウザのセンサー対応が必要です。マイクは音イベント数の計測に使い、録音データは保存しません。</p>
 </main>
-<div id="sleepCurtain" class="sleep-curtain" aria-live="off"><div class="curtain-title">おやすみ計測中</div><button id="sleepCurtainStop" class="curtain-stop" type="button">測定を終了</button></div>
+<div id="sleepCurtain" class="sleep-curtain" aria-live="off"><div class="curtain-title">おやすみ計測中</div><button id="sleepCurtainStop" class="curtain-stop" type="button">■ 測定を終了</button></div>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
